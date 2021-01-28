@@ -1,7 +1,9 @@
 const fs = require("fs");
 const { execSync, spawn } = require("child_process");
-const gpio = require('rpi-gpio');
+const gpio = require("rpi-gpio");
 const sleep = require("./util/sleep");
+const turnOnUsb = require("./util/turnOnUsb");
+const turnOffUsb = require("./util/turnOffUsb");
 
 const parameters = process.argv.slice(2);
 if (parameters.length === 0) {
@@ -37,22 +39,15 @@ function executeCommand(command) {
   });
 }
 
-async function turnOnUsb() {
-  console.log("Turn on USB")
-  await gpio.promise.write(config.gpioPin, gpio.DIR_HIGH);
-}
-
-async function turnOffUsb() {
-  console.log("Turn off USB");
-  await gpio.promise.write(config.gpioPin, false);
-}
-
 async function setup() {
   gpio.setMode(gpio.MODE_BCM);
 
   await gpio.promise.setup(config.gpioPin, gpio.DIR_OUT);
 
-  await turnOnUsb();
+  //execSync(`veracrypt --dismount ${config.diskPath}`);
+  await turnOffUsb(config.gpioPin);
+  await sleep(1000);
+  await turnOnUsb(config.gpioPin);
 
   console.log("Looking for connected disk...");
   let attempts = 30;
@@ -61,7 +56,7 @@ async function setup() {
     attempts--;
     if (attempts <= 0) {
       console.error(`Disk not found: ${config.diskPath}`);
-      await turnOffUsb();
+      await turnOffUsb(config.gpioPin);
       process.exit(1);
     }
   }
@@ -71,20 +66,23 @@ async function setup() {
     execSync(`veracrypt --protect-hidden=no --pim=0 --password="" -k ${config.keyFiles.join(",")} ${config.diskPath} ${config.mountPath}`);
   } catch (error) {
     console.error("Unable to mount the disk", error);
-    await turnOffUsb();
+    await turnOffUsb(config.gpioPin);
     process.exit(1);
   }
 }
 
-async function tearDown() {
+async function unmount() {
   console.log("Unmount the disk");
   try {
     execSync(`veracrypt --dismount ${config.diskPath}`);
   } catch (error) {
     console.error("Unable to unmount the disk", error);
   }
+}
 
-  await turnOffUsb();
+async function tearDown() {
+  await unmount();
+  await turnOffUsb(config.gpioPin);
 }
 
 async function main() {
