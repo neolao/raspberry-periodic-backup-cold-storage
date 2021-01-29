@@ -4,6 +4,10 @@ const gpio = require("rpi-gpio");
 const sleep = require("./util/sleep");
 const turnOnUsb = require("./util/turnOnUsb");
 const turnOffUsb = require("./util/turnOffUsb");
+const waitForDisk = require("./util/waitForDisk");
+const executeCommand = require("./util/executeCommand");
+const mountDisk = require("./util/mountDisk");
+const unmountDisk = require("./util/unmountDisk");
 
 const parameters = process.argv.slice(2);
 if (parameters.length === 0) {
@@ -16,78 +20,43 @@ const config = require(configPath);
 console.log("Configuration", config);
 console.log("");
 
-function executeCommand(command) {
-  const commandArgv = command.split(" ");
-  const executable = commandArgv.shift();
-
-  return new Promise((resolve, reject) => {
-    const childProcess = spawn(executable, commandArgv);
-    childProcess.stdout.on("data", data => {
-      process.stdout.write(data);
-    });
-    childProcess.stderr.on("data", data => {
-      process.stderr.write(data);
-    });
-
-    childProcess.on("close", code => {
-      if (code === 0) {
-        resolve();
-	return;
-      }
-      reject(code);
-    });
-  });
+async function tearDown() {
+  try {
+    unmountDisk(config.diskPath);
+  } catch (error) {
+    console.error("Unable to unmount the disk", error);
+  }
+  await turnOffUsb(config.gpioPin);
 }
 
-async function setup() {
+async function main() {
   gpio.setMode(gpio.MODE_BCM);
 
   await gpio.promise.setup(config.gpioPin, gpio.DIR_OUT);
 
-  //execSync(`veracrypt --dismount ${config.diskPath}`);
+  try {
+    unmountDisk(config.diskPath);
+  } catch (error) {}
   await turnOffUsb(config.gpioPin);
   await sleep(1000);
   await turnOnUsb(config.gpioPin);
 
-  console.log("Looking for connected disk...");
-  let attempts = 30;
-  while (!fs.existsSync(config.diskPath)) {
-    await sleep(1000);
-    attempts--;
-    if (attempts <= 0) {
-      console.error(`Disk not found: ${config.diskPath}`);
-      await turnOffUsb(config.gpioPin);
-      process.exit(1);
-    }
+  try {
+    await waitForDisk(config.diskPath);
+  } catch (error) {
+    console.error(`Disk not found: ${config.diskPath}`);
+    await turnOffUsb(config.gpioPin);
+    process.exit(1);
   }
 
-  console.log("Mount the disk");
   try {
-    execSync(`veracrypt --protect-hidden=no --pim=0 --password="" -k ${config.keyFiles.join(",")} ${config.diskPath} ${config.mountPath}`);
+    mountDisk(config.diskPath, config.mountPath, config.keyFiles);
   } catch (error) {
     console.error("Unable to mount the disk", error);
     await turnOffUsb(config.gpioPin);
     process.exit(1);
   }
-}
 
-async function unmount() {
-  console.log("Unmount the disk");
-  try {
-    execSync(`veracrypt --dismount ${config.diskPath}`);
-  } catch (error) {
-    console.error("Unable to unmount the disk", error);
-  }
-}
-
-async function tearDown() {
-  await unmount();
-  await turnOffUsb(config.gpioPin);
-}
-
-async function main() {
-  await setup();
-	
   console.log("Execute the command");
   try {
     await executeCommand(config.command);
